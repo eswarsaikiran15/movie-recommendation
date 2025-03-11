@@ -69,7 +69,7 @@ Various machine learning models are tested and evaluated, including:
 1. Clone this repository:
     
     ```bash
-    git clone https://github.com/yourusername/movie_prediction_ml.git
+    git clone https://github.com/eswarsaikiran15/movie-recommendation.git
     ```
     
 2. Navigate to the project folder:
