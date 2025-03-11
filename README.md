@@ -75,13 +75,13 @@ Various machine learning models are tested and evaluated, including:
 2. Navigate to the project folder:
     
     ```bash
-    cd movie_prediction_ml
+    cd movie_recommendation_ml
     ```
     
 3. Run the Python script:
     
     ```bash
-    python movie_prediction.py
+    python movie_recommender.py
     ```
     
 
