@@ -1,40 +1,43 @@
 import pandas as pd
 import streamlit as st
 import numpy as np
+import requests
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import linear_kernel
+import faiss  # Faster nearest neighbors
 
-# Define file paths
-movies_path = "movies.csv"
-ratings_path = "ratings.csv"
-tags_path = "tags.csv"
-links_path = "links.csv"
+# TMDb API Key (Replace with your own key)
+TMDB_API_KEY = "041f607218b2a8fdce2533ded7e5e457"
 
-# Load datasets
-movies = pd.read_csv(movies_path)
-ratings = pd.read_csv(ratings_path)
-tags = pd.read_csv(tags_path)
-links = pd.read_csv(links_path)
+# Load datasets from GitHub
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/eswarsaikiran15/movie-recommendation/main/movie_recommender/"
 
-# Ensure necessary columns exist
-if "movieId" not in movies.columns:
-    raise ValueError("movies.csv is missing 'movieId' column")
+def load_csv(file_name, dtype=None):
+    return pd.read_csv(GITHUB_RAW_URL + file_name, dtype=dtype, low_memory=False)
+
+movies = load_csv("movies.csv")
+ratings = load_csv("ratings.csv", dtype={"userId": "int32", "movieId": "int32", "rating": "float32"})
+tags = load_csv("tags.csv")
+links = load_csv("links.csv", dtype={"movieId": "int32", "tmdbId": "Int32", "imdbId": "Int32"})
+
+# Display number of movies loaded
+st.write(f"Loaded {len(movies)} movies")
+
+# Merge TMDb IDs with movies dataset
+movies = movies.merge(links[["movieId", "tmdbId", "imdbId"]], on="movieId", how="left")
 
 # Handle missing values
 movies["genres"].fillna("", inplace=True)
-
-# Merge links with movies to include external links
-movies = movies.merge(links, on="movieId", how="left")
-
-# Ensure IMDB IDs are properly formatted
-movies["imdbId"] = movies["imdbId"].apply(lambda x: f"tt{int(x):07d}" if pd.notnull(x) else None)
+movies["tmdbId"].fillna(0, inplace=True)
+movies["tmdbId"] = movies["tmdbId"].astype("int64")  # Ensure tmdbId is an integer
+movies["imdbId"].fillna(0, inplace=True)
 
 # TF-IDF Vectorization
 vectorizer = TfidfVectorizer(stop_words="english")
-tfidf_matrix = vectorizer.fit_transform(movies["genres"])
+tfidf_matrix = vectorizer.fit_transform(movies["genres"]).toarray().astype("float32")  # Convert to dense and float32
 
-# Compute similarity
-cosine_sim = linear_kernel(tfidf_matrix, tfidf_matrix)
+# Use Faiss for faster nearest neighbors
+index = faiss.IndexFlatL2(tfidf_matrix.shape[1])
+index.add(tfidf_matrix)
 
 # Preprocess movie titles
 def clean_title(title):
@@ -47,19 +50,23 @@ avg_ratings = ratings.groupby("movieId")["rating"].mean().reset_index()
 movies = movies.merge(avg_ratings, on="movieId", how="left")
 movies["rating"].fillna(movies["rating"].mean(), inplace=True)
 
-# Function to get movie recommendations
-def get_recommendations(title, movies, cosine_sim, num_recommendations=5, min_rating=0):
+# Get movie recommendations
+def get_recommendations(title, movies, index, tfidf_matrix, num_recommendations=5, min_rating=0):
     title = clean_title(title)
     idx = movies.index[movies["title_clean"] == title].tolist()
     if not idx:
         return []
     idx = idx[0]
-    sim_scores = sorted(list(enumerate(cosine_sim[idx])), key=lambda x: x[1], reverse=True)[1:]
-    movie_indices = [i[0] for i in sim_scores]
-    recommended_movies = movies.iloc[movie_indices].copy()
+    
+    distances, indices = index.search(np.array([tfidf_matrix[idx]]).astype("float32"), num_recommendations + 1)
+    recommended_movies = movies.iloc[indices[0][1:]].copy()
     recommended_movies = recommended_movies[recommended_movies["rating"] >= min_rating]
-    recommended_movies["weighted_score"] = recommended_movies["rating"] * 0.7 + np.arange(len(recommended_movies), 0, -1) * 0.3
-    return recommended_movies.sort_values(by="weighted_score", ascending=False)[["title", "rating", "imdbId"]].head(num_recommendations).values.tolist()
+    
+    if len(recommended_movies) < num_recommendations:
+        top_movies = movies.sort_values(by="rating", ascending=False).head(num_recommendations - len(recommended_movies))
+        recommended_movies = pd.concat([recommended_movies, top_movies])
+    
+    return recommended_movies.sort_values(by="rating", ascending=False)[["title", "rating", "tmdbId", "imdbId"]].head(num_recommendations).values.tolist()
 
 # Streamlit UI
 st.title("🎬 Movie Recommender")
@@ -71,20 +78,15 @@ min_rating = st.slider("Enter minimum rating for recommendations:", 0.0, 5.0, 3.
 if st.button("Get Recommendations"):
     if movie_title:
         with st.spinner("Fetching recommendations..."):
-            recommendations = get_recommendations(movie_title, movies, cosine_sim, num_recommendations, min_rating)
+            recommendations = get_recommendations(movie_title, movies, index, tfidf_matrix, num_recommendations, min_rating)
         
         if recommendations:
             st.subheader(f"Movies similar to '{movie_title}':")
             for rec in recommendations:
-                title, rating, imdb_id = rec
-                if imdb_id:
-                    imdb_url = f"https://www.imdb.com/title/{imdb_id}/"
-                    st.markdown(f"- **{title}** (⭐ {round(rating, 1)}) - [IMDB Link]({imdb_url})")
+                title, rating, tmdb_id, imdb_id = rec
+                imdb_url = f"https://www.imdb.com/title/tt{str(int(imdb_id)).zfill(7)}/" if imdb_id and imdb_id != 0 else None
+                
+                if imdb_url:
+                    st.markdown(f"**{title}** (⭐ {round(rating, 1)}) - [IMDb Link]({imdb_url})")
                 else:
-                    st.markdown(f"- **{title}** (⭐ {round(rating, 1)}) - No IMDB Link Available")
-        else:
-            st.warning(f"No recommendations found for '{movie_title}'. Showing top-rated movies instead.")
-            top_movies = movies.sort_values(by="rating", ascending=False).head(num_recommendations)
-            for _, row in top_movies.iterrows():
-                imdb_url = f"https://www.imdb.com/title/{row['imdbId']}/" if pd.notnull(row['imdbId']) else "No IMDB Link Available"
-                st.markdown(f"- **{row['title']}** (⭐ {round(row['rating'], 1)}) - {imdb_url}")
+                    st.markdown(f"**{title}** (⭐ {round(rating, 1)})")
