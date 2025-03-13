@@ -5,10 +5,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 
 # Define file paths
-movies_path = "movies.csv"
-ratings_path = "ratings.csv"
-tags_path = "tags.csv"
-links_path = "links.csv"
+movies_path = "data/movies.csv"
+ratings_path = "data/ratings.csv"
+tags_path = "data/tags.csv"
+links_path = "data/links.csv"
 
 # Load datasets
 movies = pd.read_csv(movies_path)
