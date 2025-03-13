@@ -5,10 +5,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 
 # Define file paths
-movies_path = "data/movies.csv"
-ratings_path = "data/ratings.csv"
-tags_path = "data/tags.csv"
-links_path = "data/links.csv"
+movies_path = "movies.csv"
+ratings_path = "ratings.csv"
+tags_path = "tags.csv"
+links_path = "links.csv"
 
 # Load datasets
 movies = pd.read_csv(movies_path)
@@ -26,8 +26,10 @@ movies["genres"].fillna("", inplace=True)
 # Merge links with movies to include external links
 movies = movies.merge(links, on="movieId", how="left")
 
-# Ensure IMDB IDs are properly formatted
-movies["imdbId"] = movies["imdbId"].apply(lambda x: f"tt{int(x):07d}" if pd.notnull(x) else None)
+# Ensure IMDB IDs are properly formatted if they exist
+if "imdbId" in movies.columns:
+    movies["imdbId"] = movies["imdbId"].fillna(0).astype(int)
+    movies["imdbId"] = movies["imdbId"].apply(lambda x: f"tt{x:07d}" if x > 0 else None)
 
 # TF-IDF Vectorization
 vectorizer = TfidfVectorizer(stop_words="english")
@@ -54,12 +56,20 @@ def get_recommendations(title, movies, cosine_sim, num_recommendations=5, min_ra
     if not idx:
         return []
     idx = idx[0]
-    sim_scores = sorted(list(enumerate(cosine_sim[idx])), key=lambda x: x[1], reverse=True)[1:]
-    movie_indices = [i[0] for i in sim_scores]
-    recommended_movies = movies.iloc[movie_indices].copy()
+    
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:]
+
+    recommended_movies = movies.iloc[[i[0] for i in sim_scores]].copy()
     recommended_movies = recommended_movies[recommended_movies["rating"] >= min_rating]
-    recommended_movies["weighted_score"] = recommended_movies["rating"] * 0.7 + np.arange(len(recommended_movies), 0, -1) * 0.3
-    return recommended_movies.sort_values(by="weighted_score", ascending=False)[["title", "rating", "imdbId"]].head(num_recommendations).values.tolist()
+    
+    # Weighted score calculation
+    recommended_movies["weighted_score"] = (
+        recommended_movies["rating"] * 0.7 + 
+        np.linspace(len(recommended_movies), 1, len(recommended_movies)) * 0.3
+    )
+
+    return recommended_movies.nlargest(num_recommendations, "weighted_score")[["title", "rating", "imdbId"]].values.tolist()
 
 # Streamlit UI
 st.title("🎬 Movie Recommender")
@@ -75,13 +85,9 @@ if st.button("Get Recommendations"):
         
         if recommendations:
             st.subheader(f"Movies similar to '{movie_title}':")
-            for rec in recommendations:
-                title, rating, imdb_id = rec
-                if imdb_id:
-                    imdb_url = f"https://www.imdb.com/title/{imdb_id}/"
-                    st.markdown(f"- **{title}** (⭐ {round(rating, 1)}) - [IMDB Link]({imdb_url})")
-                else:
-                    st.markdown(f"- **{title}** (⭐ {round(rating, 1)}) - No IMDB Link Available")
+            for title, rating, imdb_id in recommendations:
+                imdb_url = f"https://www.imdb.com/title/{imdb_id}/" if imdb_id else "No IMDB Link Available"
+                st.markdown(f"- **{title}** (⭐ {round(rating, 1)}) - [IMDB Link]({imdb_url})")
         else:
             st.warning(f"No recommendations found for '{movie_title}'. Showing top-rated movies instead.")
             top_movies = movies.sort_values(by="rating", ascending=False).head(num_recommendations)
