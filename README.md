@@ -1,4 +1,4 @@
-live_demo: https://movierecommendation-sv.streamlit.app/
+**live_demo**: https://movierecommendation-sv.streamlit.app/
 
 
 # Movie Prediction using Machine Learning
